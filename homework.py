@@ -1,6 +1,5 @@
 import logging
 import os
-import sys
 import time
 from http import HTTPStatus
 from logging.handlers import RotatingFileHandler
@@ -20,6 +19,8 @@ RETRY_PERIOD = 600
 ENDPOINT = 'https://practicum.yandex.ru/api/user_api/homework_statuses/'
 HEADERS = {'Authorization': f'OAuth {PRACTICUM_TOKEN}'}
 
+TOKENS = (PRACTICUM_TOKEN, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID)
+
 HOMEWORK_VERDICTS = {
     'approved': 'Работа проверена: ревьюеру всё понравилось. Ура!',
     'reviewing': 'Работа взята на проверку ревьюером.',
@@ -29,41 +30,48 @@ HOMEWORK_VERDICTS = {
 DATA_ERROR = 'Отсутствуют обязательные переменные окружения'
 DICT_ERROR = 'Ответ API не преобразован в словарь. Тип ответа: {type}'
 HOMEWORKS_ERROR = 'Нет домашних работ'
-HTTP_ERROR = 'Не доступен эндпоинт: {error}'
+HTTP_ERROR = (
+    'Не доступен эндпоинт: {status_code}. '
+    'URL - {url}, заголовки - {headers}, время - {params}.'
+)
 KEY_ERROR = 'Ошибка ключа {key}'
 LIST_ERROR = (
     'Ответ API не содержит список под ключом "homeworks". '
     'Тип ответа: {type}'
 )
 PROGRAMM_ERROR = 'Сбой в работе программы: {error}'
-SENDING_MESSAGE_ERROR = 'Ошибка при отправке сообщения: {error}'
-SERVER_ERROR = 'Возникла ошибка при запросе к API: {error}'
+SENDING_MESSAGE_ERROR = 'Ошибка при отправке сообщения "{message}": {error}'
+SERVER_ERROR = (
+    'Возникла ошибка при запросе к API: '
+    'URL - {url}, заголовки - {headers}, время - {params}.'
+)
+SERVICE_ERROR = (
+    'Сбой сервера: {code} - {error}. '
+    'URL - {url}, заголовки - {headers}, время - {params}.'
+)
 STATUS_ERROR = 'Неопознанный статус - {status}'
 
+SUCCESS_SENDING_MESSAGE = 'Сообщение отправлено успешно: {message}'
+STATUS_UPDATED = 'Изменился статус проверки работы "{name}". {verdict}'
 
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s, %(levelname)s, %(name)s, %(message)s'
-)
+
+class ServerError(Exception):
+    """Ошибка сервера Яндекс.Практикум."""
+
+    pass
+
+
 logger = logging.getLogger(__name__)
-handler = RotatingFileHandler(
-    'main.log',
-    maxBytes=50000000,
-    backupCount=5,
-    encoding='UTF-8'
-)
-logger.addHandler(handler)
-formatter = logging.Formatter(
-    '%(asctime)s - %(levelname)s - %(name)s - %(message)s'
-)
-handler.setFormatter(formatter)
 
 
 def check_tokens():
     """Проверяем доступность переменных окружения."""
-    return all(
-        (PRACTICUM_TOKEN, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID)
-    )
+    for key in (PRACTICUM_TOKEN, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID):
+        if key is None:
+            return False
+        if not key:
+            return False
+    return True
 
 
 def send_message(bot, message):
@@ -72,25 +80,38 @@ def send_message(bot, message):
     try:
         bot.send_message(TELEGRAM_CHAT_ID, message)
     except Exception as error:
-        logger.error(SENDING_MESSAGE_ERROR.format(error=error))
-    logger.debug(f'Сообщение отправлено успешно: {message}')
+        logger.exception(
+            SENDING_MESSAGE_ERROR.format(error=error, message=message)
+        )
+    logger.debug(SUCCESS_SENDING_MESSAGE.format(message=message))
 
 
 def get_api_answer(timestamp):
     """Делаем запрос к единственному эндпоинту API-сервиса."""
     logger.debug('Отправляем запрос')
+    params = {'from_date': timestamp}
+    request_params = dict(url=ENDPOINT, headers=HEADERS, params=params)
     try:
-        response = requests.get(
-            ENDPOINT,
-            headers=HEADERS,
-            params={'from_date': timestamp}
-        )
-    except Exception as error:
-        logger.error(SERVER_ERROR.format(error=error))
+        response = requests.get(**request_params)
+    except requests.exceptions.RequestException as error:
+        raise ConnectionError(
+            SERVER_ERROR.format(**request_params)
+        ) from error
     if response.status_code != HTTPStatus.OK:
-        raise requests.HTTPError(
-            HTTP_ERROR.format(error=response.status_code)
+        raise ServerError(
+            HTTP_ERROR.format(
+                status_code=response.status_code,
+                **request_params
+            )
         )
+    for item in ('code', 'error'):
+        if item in response.json():
+            raise ServerError(SERVICE_ERROR.format(
+                    code=response.json['code'],
+                    error=response.json['error'],
+                    **request_params
+                )
+            )
     return response.json()
 
 
@@ -105,8 +126,6 @@ def check_response(response):
     if 'homeworks' not in response:
         raise KeyError(KEY_ERROR.format(key='homeworks'))
     homeworks = response['homeworks']
-    if 'current_date' not in response:
-        raise KeyError(KEY_ERROR.format(key='current_date'))
     if not isinstance(homeworks, list):
         raise TypeError(
             LIST_ERROR.format(type=type(homeworks))
@@ -119,24 +138,25 @@ def parse_status(homework):
     logger.debug('Извлекаем статус домашней работы')
     if 'homework_name' not in homework:
         raise KeyError(KEY_ERROR.format(key='homework_name'))
-    homework_name = homework['homework_name']
+    name = homework['homework_name']
     if 'status' not in homework:
         raise KeyError(KEY_ERROR.format(key='status'))
-    homework_status = homework['status']
-    if homework_status not in HOMEWORK_VERDICTS:
-        raise KeyError(STATUS_ERROR.format(status=homework_status))
-    verdict = HOMEWORK_VERDICTS[homework_status]
-    return f'Изменился статус проверки работы "{homework_name}". {verdict}'
+    status = homework['status']
+    if status not in HOMEWORK_VERDICTS:
+        raise ValueError(STATUS_ERROR.format(status=status))
+    verdict = HOMEWORK_VERDICTS[status]
+    return STATUS_UPDATED.format(name=name, verdict=verdict)
 
 
 def main():
     """Основная логика работы бота."""
     if not check_tokens():
         logger.critical(DATA_ERROR)
-        sys.exit(1)
+        return
     bot = Bot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time())
     recent_message = ''
+    prev_error = ''
     while True:
         try:
             response = get_api_answer(timestamp)
@@ -145,14 +165,31 @@ def main():
                 message = parse_status(homeworks[0])
             else:
                 logger.error(HOMEWORKS_ERROR)
-            if message != recent_message:
-                send_message(bot, message)
+            if message != recent_message and send_message(bot, message):
                 recent_message = message
-        except Exception as error:
-            logger.error(PROGRAMM_ERROR.format(error=error))
+                timestamp = response.get('current_date')
+        except Exception as new_error:
+            error = PROGRAMM_ERROR.format(error=new_error)
+            logger.exception(error)
+            if prev_error != error and send_message(bot, error):
+                prev_error = error
         finally:
             time.sleep(RETRY_PERIOD)
 
 
 if __name__ == '__main__':
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format=(
+            '%(asctime)s - %(levelname)s - %(name)s - '
+            '%(funcName)s - %(lineno)s - %(message)s'
+        )
+    )
+    handler = RotatingFileHandler(
+        f'{__file__}.log',
+        maxBytes=50000000,
+        backupCount=5,
+        encoding='UTF-8'
+    )
+    logger.addHandler(handler)
     main()
