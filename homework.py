@@ -40,7 +40,6 @@ LIST_ERROR = (
     'Ответ API не содержит список под ключом "homeworks". '
     'Тип ответа: {type}'
 )
-MESSAGE_ERROR = 'Сообщение не отправлено: {err}'
 MISSING_TOKEN_ERROR = 'Токен {key} отсутствует'
 PROGRAMM_ERROR = 'Сбой в работе программы: {error}'
 SENDING_MESSAGE_ERROR = 'Ошибка при отправке сообщения "{message}": {error}'
@@ -49,7 +48,7 @@ SERVER_ERROR = (
     'URL - {url}, заголовки - {headers}, время - {params}.'
 )
 SERVICE_ERROR = (
-    'Сбой сервера: {server_errors}. '
+    'Сбой сервера: {item}. '
     'URL - {url}, заголовки - {headers}, время - {params}.'
 )
 STATUS_ERROR = 'Неопознанный статус - {status}'
@@ -80,9 +79,6 @@ logger = logging.getLogger(__name__)
 def check_tokens():
     """Проверяем доступность переменных окружения."""
     for key in (PRACTICUM_TOKEN, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID):
-        if key is None:
-            logger.critical(MISSING_TOKEN_ERROR.format(key=key))
-            return False
         if not key:
             logger.critical(EMPTY_TOKEN_ERROR.format(key=key))
             return False
@@ -123,15 +119,12 @@ def get_api_answer(timestamp):
             )
         )
     response_json = response.json()
-    server_errors = []
     for item in ('code', 'error'):
         if item in response_json:
-            server_errors.append(f'{item} : {response_json[item]}')
-    if server_errors:
-        raise ServerError(SERVICE_ERROR.format(
-            server_errors=server_errors,
-            **request_params)
-        )
+            raise ServerError(SERVICE_ERROR.format(
+                item=item,
+                **request_params)
+            )
     return response_json
 
 
@@ -166,7 +159,7 @@ def parse_status(homework):
     return STATUS_UPDATED.format(name=name, verdict=HOMEWORK_VERDICTS[status])
 
 
-def main():  # noqa: C901
+def main():
     """Основная логика работы бота."""
     try:
         check_tokens()
@@ -181,19 +174,16 @@ def main():  # noqa: C901
             homeworks = check_response(response)
             if homeworks:
                 message = parse_status(homeworks[0])
-                if send_message(bot, message):
-                    timestamp = response.get('current_date', timestamp)
+                send_message(bot, message)
+                timestamp = response.get('current_date', timestamp)
             else:
                 logger.error(HOMEWORKS_ERROR)
         except Exception as new_error:
             error = PROGRAMM_ERROR.format(error=new_error)
             logger.exception(error)
             if error != prev_error:
-                try:
-                    if send_message(bot, error):
-                        prev_error = error
-                except Exception as err:
-                    logger.exception(MESSAGE_ERROR.format(err=err))
+                send_message(bot, error)
+                prev_error = error
         finally:
             time.sleep(RETRY_PERIOD)
 
