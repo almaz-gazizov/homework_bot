@@ -51,6 +51,11 @@ SERVICE_ERROR = (
 )
 STATUS_ERROR = 'Неопознанный статус - {status}'
 
+CHECK_RESPONSE = 'Проверяем ответ API'
+GET_HOMEWORK = 'Извлекаем статус домашней работы'
+GET_RESPONSE = 'Получили ответ'
+SENDING_MESSAGE = 'Отправляем сообщение: {message}'
+SENDING_REQUEST = 'Отправляем запрос'
 SUCCESS_SENDING_MESSAGE = 'Сообщение отправлено успешно: {message}'
 STATUS_UPDATED = 'Изменился статус проверки работы "{name}". {verdict}'
 
@@ -76,7 +81,7 @@ def check_tokens():
 
 def send_message(bot, message):
     """Отправляем сообщение в Telegram чат."""
-    logger.info(f'Отправляем сообщение: {message}')
+    logger.info(SENDING_MESSAGE.format(message=message))
     try:
         bot.send_message(TELEGRAM_CHAT_ID, message)
     except Exception as error:
@@ -88,7 +93,7 @@ def send_message(bot, message):
 
 def get_api_answer(timestamp):
     """Делаем запрос к единственному эндпоинту API-сервиса."""
-    logger.debug('Отправляем запрос')
+    logger.debug(SENDING_REQUEST)
     params = {'from_date': timestamp}
     request_params = dict(url=ENDPOINT, headers=HEADERS, params=params)
     try:
@@ -117,8 +122,8 @@ def get_api_answer(timestamp):
 
 def check_response(response):
     """Проверяем ответ API на соответствие документации."""
-    logger.debug('Получили ответ')
-    logger.info('Проверяем ответ API')
+    logger.debug(GET_RESPONSE)
+    logger.info(CHECK_RESPONSE)
     if not isinstance(response, dict):
         raise TypeError(
             DICT_ERROR.format(type=type(response))
@@ -135,7 +140,7 @@ def check_response(response):
 
 def parse_status(homework):
     """Извлекаем из информации о домашней работе статус этой работы."""
-    logger.debug('Извлекаем статус домашней работы')
+    logger.debug(GET_HOMEWORK)
     if 'homework_name' not in homework:
         raise KeyError(KEY_ERROR.format(key='homework_name'))
     name = homework['homework_name']
