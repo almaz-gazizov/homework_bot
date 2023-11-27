@@ -112,10 +112,9 @@ def get_api_answer(timestamp):
     for item in ('code', 'error'):
         if item in response.json():
             raise ServerError(SERVICE_ERROR.format(
-                    code=response.json['code'],
-                    error=response.json['error'],
-                    **request_params
-                )
+                code=response.json['code'],
+                error=response.json['error'],
+                **request_params)
             )
     return response.json()
 
