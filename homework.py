@@ -166,7 +166,7 @@ def parse_status(homework):
     return STATUS_UPDATED.format(name=name, verdict=HOMEWORK_VERDICTS[status])
 
 
-def main():
+def main():  # noqa: C901
     """Основная логика работы бота."""
     try:
         check_tokens()
