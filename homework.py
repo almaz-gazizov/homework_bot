@@ -1,8 +1,8 @@
 import logging
 import os
+import sys
 import time
 from http import HTTPStatus
-from logging.handlers import RotatingFileHandler
 
 import requests
 from dotenv import load_dotenv
@@ -27,31 +27,33 @@ HOMEWORK_VERDICTS = {
     'rejected': 'Работа проверена: у ревьюера есть замечания.'
 }
 
-DATA_ERROR = 'Отсутствуют обязательные переменные окружения'
-DICT_ERROR = 'Ответ API не преобразован в словарь. Тип ответа: {type}'
-HOMEWORKS_ERROR = 'Нет домашних работ'
-HTTP_ERROR = (
-    'Не доступен эндпоинт: {status_code}. '
+CONNECTION_ERROR = (
+    'Возникла ошибка при запросе к API: {error}. '
     'URL - {url}, заголовки - {headers}, время - {params}.'
 )
+DATA_ERROR = 'Отсутствуют обязательные переменные окружения: {error}'
+DICT_ERROR = 'Ответ API не преобразован в словарь. Тип ответа: {type}'
+EMPTY_TOKEN_ERROR = 'Токен {key} пустой'
+HOMEWORKS_ERROR = 'Нет домашних работ'
 KEY_ERROR = 'Ошибка ключа {key}'
 LIST_ERROR = (
     'Ответ API не содержит список под ключом "homeworks". '
     'Тип ответа: {type}'
 )
+MESSAGE_ERROR = 'Сообщение не отправлено: {err}'
+MISSING_TOKEN_ERROR = 'Токен {key} отсутствует'
 PROGRAMM_ERROR = 'Сбой в работе программы: {error}'
 SENDING_MESSAGE_ERROR = 'Ошибка при отправке сообщения "{message}": {error}'
 SERVER_ERROR = (
-    'Возникла ошибка при запросе к API: '
+    'Не доступен эндпоинт: {status_code}. '
     'URL - {url}, заголовки - {headers}, время - {params}.'
 )
 SERVICE_ERROR = (
-    'Сбой сервера: {code} - {error}. '
+    'Сбой сервера: {server_errors}. '
     'URL - {url}, заголовки - {headers}, время - {params}.'
 )
 STATUS_ERROR = 'Неопознанный статус - {status}'
 
-CHECK_RESPONSE = 'Проверяем ответ API'
 GET_HOMEWORK = 'Извлекаем статус домашней работы'
 GET_RESPONSE = 'Получили ответ'
 SENDING_MESSAGE = 'Отправляем сообщение: {message}'
@@ -66,6 +68,12 @@ class ServerError(Exception):
     pass
 
 
+class TokensError(Exception):
+    """Ошибка доступа переменных окружения."""
+
+    pass
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -73,8 +81,10 @@ def check_tokens():
     """Проверяем доступность переменных окружения."""
     for key in (PRACTICUM_TOKEN, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID):
         if key is None:
+            logger.critical(MISSING_TOKEN_ERROR.format(key=key))
             return False
         if not key:
+            logger.critical(EMPTY_TOKEN_ERROR.format(key=key))
             return False
     return True
 
@@ -94,35 +104,40 @@ def send_message(bot, message):
 def get_api_answer(timestamp):
     """Делаем запрос к единственному эндпоинту API-сервиса."""
     logger.debug(SENDING_REQUEST)
-    params = {'from_date': timestamp}
-    request_params = dict(url=ENDPOINT, headers=HEADERS, params=params)
+    request_params = dict(
+        url=ENDPOINT,
+        headers=HEADERS,
+        params={'from_date': timestamp}
+    )
     try:
         response = requests.get(**request_params)
     except requests.exceptions.RequestException as error:
         raise ConnectionError(
-            SERVER_ERROR.format(**request_params)
-        ) from error
+            CONNECTION_ERROR.format(error=error, **request_params)
+        )
     if response.status_code != HTTPStatus.OK:
         raise ServerError(
-            HTTP_ERROR.format(
+            SERVER_ERROR.format(
                 status_code=response.status_code,
                 **request_params
             )
         )
+    response_json = response.json()
+    server_errors = []
     for item in ('code', 'error'):
-        if item in response.json():
-            raise ServerError(SERVICE_ERROR.format(
-                code=response.json['code'],
-                error=response.json['error'],
-                **request_params)
-            )
-    return response.json()
+        if item in response_json:
+            server_errors.append(f'{item} : {response_json[item]}')
+    if server_errors:
+        raise ServerError(SERVICE_ERROR.format(
+            server_errors=server_errors,
+            **request_params)
+        )
+    return response_json
 
 
 def check_response(response):
     """Проверяем ответ API на соответствие документации."""
     logger.debug(GET_RESPONSE)
-    logger.info(CHECK_RESPONSE)
     if not isinstance(response, dict):
         raise TypeError(
             DICT_ERROR.format(type=type(response))
@@ -148,18 +163,17 @@ def parse_status(homework):
     status = homework['status']
     if status not in HOMEWORK_VERDICTS:
         raise ValueError(STATUS_ERROR.format(status=status))
-    verdict = HOMEWORK_VERDICTS[status]
-    return STATUS_UPDATED.format(name=name, verdict=verdict)
+    return STATUS_UPDATED.format(name=name, verdict=HOMEWORK_VERDICTS[status])
 
 
 def main():
     """Основная логика работы бота."""
-    if not check_tokens():
-        logger.critical(DATA_ERROR)
-        return
+    try:
+        check_tokens()
+    except Exception as error:
+        raise TokensError(DATA_ERROR.format(error=error))
     bot = Bot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time())
-    recent_message = ''
     prev_error = ''
     while True:
         try:
@@ -167,16 +181,19 @@ def main():
             homeworks = check_response(response)
             if homeworks:
                 message = parse_status(homeworks[0])
+                if send_message(bot, message):
+                    timestamp = response.get('current_date', timestamp)
             else:
                 logger.error(HOMEWORKS_ERROR)
-            if message != recent_message and send_message(bot, message):
-                recent_message = message
-                timestamp = response.get('current_date')
         except Exception as new_error:
             error = PROGRAMM_ERROR.format(error=new_error)
             logger.exception(error)
-            if prev_error != error and send_message(bot, error):
-                prev_error = error
+            if error != prev_error:
+                try:
+                    if send_message(bot, error):
+                        prev_error = error
+                except Exception as err:
+                    logger.exception(MESSAGE_ERROR.format(err=err))
         finally:
             time.sleep(RETRY_PERIOD)
 
@@ -187,13 +204,13 @@ if __name__ == '__main__':
         format=(
             '%(asctime)s - %(levelname)s - %(name)s - '
             '%(funcName)s - %(lineno)s - %(message)s'
-        )
+        ),
+        handlers=[
+            logging.StreamHandler(sys.stdout),
+            logging.FileHandler(
+                f'{__file__}.log',
+                encoding='utf-8'
+            )
+        ]
     )
-    handler = RotatingFileHandler(
-        f'{__file__}.log',
-        maxBytes=50000000,
-        backupCount=5,
-        encoding='UTF-8'
-    )
-    logger.addHandler(handler)
     main()
