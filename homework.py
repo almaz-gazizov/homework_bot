@@ -23,11 +23,6 @@ HOMEWORK_VERDICTS = {
     'reviewing': 'Работа взята на проверку ревьюером.',
     'rejected': 'Работа проверена: у ревьюера есть замечания.'
 }
-# TOKENS = {
-#     'PRACTICUM_TOKEN': PRACTICUM_TOKEN,
-#     'TELEGRAM_TOKEN': TELEGRAM_TOKEN,
-#     'TELEGRAM_CHAT_ID': TELEGRAM_CHAT_ID
-# }
 
 CONNECTION_ERROR = (
     'Возникла ошибка при запросе к API: {error}. '
@@ -35,7 +30,7 @@ CONNECTION_ERROR = (
 )
 DATA_ERROR = 'Отсутствуют обязательные переменные окружения: {error}'
 DICT_ERROR = 'Ответ API не преобразован в словарь. Тип ответа: {type}'
-EMPTY_TOKEN_ERROR = 'Токен {key} пустой'
+EMPTY_TOKEN_ERROR = 'Токен {name} пустой'
 HOMEWORKS_ERROR = 'Нет домашних работ'
 KEY_ERROR = 'Ошибка ключа {key}'
 LIST_ERROR = (
@@ -80,32 +75,25 @@ logger = logging.getLogger(__name__)
 
 def check_tokens():
     """Проверяем доступность переменных окружения."""
-    if not PRACTICUM_TOKEN:
-        logger.critical(EMPTY_TOKEN_ERROR.format(key='PRACTICUM_TOKEN'))
-    if not TELEGRAM_TOKEN:
-        logger.critical(EMPTY_TOKEN_ERROR.format(key='TELEGRAM_TOKEN'))
-    if not TELEGRAM_CHAT_ID:
-        logger.critical(EMPTY_TOKEN_ERROR.format(key='TELEGRAM_CHAT_ID'))
-    # for key, value in TOKENS.items():
-    #   if not value:
-    #        logger.critical(EMPTY_TOKEN_ERROR.format(key=key))
-    #        return False
-    # return True
+    for name in ('PRACTICUM_TOKEN', 'TELEGRAM_TOKEN', 'TELEGRAM_CHAT_ID'):
+        if not globals()[name]:
+            logger.critical(EMPTY_TOKEN_ERROR.format(name=name))
+            return False
+    return True
 
 
 def send_message(bot, message):
     """Отправляем сообщение в Telegram чат."""
     logger.info(SENDING_MESSAGE.format(message=message))
-    sent = False
     try:
         bot.send_message(TELEGRAM_CHAT_ID, message)
-        sent = True
+        logger.debug(SUCCESS_SENDING_MESSAGE.format(message=message))
+        return True
     except Exception as error:
         logger.exception(
             SENDING_MESSAGE_ERROR.format(error=error, message=message)
         )
-    logger.debug(SUCCESS_SENDING_MESSAGE.format(message=message))
-    return sent
+        return False
 
 
 def get_api_answer(timestamp):
@@ -184,19 +172,15 @@ def main():
         try:
             response = get_api_answer(timestamp)
             homeworks = check_response(response)
-            if homeworks:
-                send_success = send_message(bot, parse_status(homeworks[0]))
-                if send_success:
-                    timestamp = response.get('current_date', timestamp)
+            if homeworks and send_message(bot, parse_status(homeworks[0])):
+                timestamp = response.get('current_date', timestamp)
             else:
                 logger.error(HOMEWORKS_ERROR)
         except Exception as new_error:
             error = PROGRAMM_ERROR.format(error=new_error)
             logger.exception(error)
-            if error != prev_error:
-                send_error = send_message(bot, error)
-                if send_error:
-                    prev_error = error
+            if error != prev_error and send_message(bot, error):
+                prev_error = error
         finally:
             time.sleep(RETRY_PERIOD)
 
