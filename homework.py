@@ -10,7 +10,6 @@ from telegram import Bot
 
 load_dotenv()
 
-
 PRACTICUM_TOKEN = os.getenv('PRACTICUM_TOKEN')
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
@@ -19,13 +18,16 @@ RETRY_PERIOD = 600
 ENDPOINT = 'https://practicum.yandex.ru/api/user_api/homework_statuses/'
 HEADERS = {'Authorization': f'OAuth {PRACTICUM_TOKEN}'}
 
-TOKENS = (PRACTICUM_TOKEN, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID)
-
 HOMEWORK_VERDICTS = {
     'approved': 'Работа проверена: ревьюеру всё понравилось. Ура!',
     'reviewing': 'Работа взята на проверку ревьюером.',
     'rejected': 'Работа проверена: у ревьюера есть замечания.'
 }
+# TOKENS = {
+#     'PRACTICUM_TOKEN': PRACTICUM_TOKEN,
+#     'TELEGRAM_TOKEN': TELEGRAM_TOKEN,
+#     'TELEGRAM_CHAT_ID': TELEGRAM_CHAT_ID
+# }
 
 CONNECTION_ERROR = (
     'Возникла ошибка при запросе к API: {error}. '
@@ -48,7 +50,7 @@ SERVER_ERROR = (
     'URL - {url}, заголовки - {headers}, время - {params}.'
 )
 SERVICE_ERROR = (
-    'Сбой сервера: {item}. '
+    'Сбой сервера: {item} - {response}. '
     'URL - {url}, заголовки - {headers}, время - {params}.'
 )
 STATUS_ERROR = 'Неопознанный статус - {status}'
@@ -78,23 +80,32 @@ logger = logging.getLogger(__name__)
 
 def check_tokens():
     """Проверяем доступность переменных окружения."""
-    for key in (PRACTICUM_TOKEN, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID):
-        if not key:
-            logger.critical(EMPTY_TOKEN_ERROR.format(key=key))
-            return False
-    return True
+    if not PRACTICUM_TOKEN:
+        logger.critical(EMPTY_TOKEN_ERROR.format(key='PRACTICUM_TOKEN'))
+    if not TELEGRAM_TOKEN:
+        logger.critical(EMPTY_TOKEN_ERROR.format(key='TELEGRAM_TOKEN'))
+    if not TELEGRAM_CHAT_ID:
+        logger.critical(EMPTY_TOKEN_ERROR.format(key='TELEGRAM_CHAT_ID'))
+    # for key, value in TOKENS.items():
+    #   if not value:
+    #        logger.critical(EMPTY_TOKEN_ERROR.format(key=key))
+    #        return False
+    # return True
 
 
 def send_message(bot, message):
     """Отправляем сообщение в Telegram чат."""
     logger.info(SENDING_MESSAGE.format(message=message))
+    sent = False
     try:
         bot.send_message(TELEGRAM_CHAT_ID, message)
+        sent = True
     except Exception as error:
         logger.exception(
             SENDING_MESSAGE_ERROR.format(error=error, message=message)
         )
     logger.debug(SUCCESS_SENDING_MESSAGE.format(message=message))
+    return sent
 
 
 def get_api_answer(timestamp):
@@ -123,6 +134,7 @@ def get_api_answer(timestamp):
         if item in response_json:
             raise ServerError(SERVICE_ERROR.format(
                 item=item,
+                response=response_json[item],
                 **request_params)
             )
     return response_json
@@ -173,17 +185,18 @@ def main():
             response = get_api_answer(timestamp)
             homeworks = check_response(response)
             if homeworks:
-                message = parse_status(homeworks[0])
-                send_message(bot, message)
-                timestamp = response.get('current_date', timestamp)
+                send_success = send_message(bot, parse_status(homeworks[0]))
+                if send_success:
+                    timestamp = response.get('current_date', timestamp)
             else:
                 logger.error(HOMEWORKS_ERROR)
         except Exception as new_error:
             error = PROGRAMM_ERROR.format(error=new_error)
             logger.exception(error)
             if error != prev_error:
-                send_message(bot, error)
-                prev_error = error
+                send_error = send_message(bot, error)
+                if send_error:
+                    prev_error = error
         finally:
             time.sleep(RETRY_PERIOD)
 
