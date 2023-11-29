@@ -23,12 +23,13 @@ HOMEWORK_VERDICTS = {
     'reviewing': 'Работа взята на проверку ревьюером.',
     'rejected': 'Работа проверена: у ревьюера есть замечания.'
 }
+TOKENS = ('PRACTICUM_TOKEN', 'TELEGRAM_TOKEN', 'TELEGRAM_CHAT_ID')
 
 CONNECTION_ERROR = (
     'Возникла ошибка при запросе к API: {error}. '
     'URL - {url}, заголовки - {headers}, время - {params}.'
 )
-DATA_ERROR = 'Отсутствуют обязательные переменные окружения: {error}'
+DATA_ERROR = 'Отсутствуют обязательные переменные окружения: {name}'
 DICT_ERROR = 'Ответ API не преобразован в словарь. Тип ответа: {type}'
 EMPTY_TOKEN_ERROR = 'Токен {name} пустой'
 HOMEWORKS_ERROR = 'Нет домашних работ'
@@ -75,11 +76,13 @@ logger = logging.getLogger(__name__)
 
 def check_tokens():
     """Проверяем доступность переменных окружения."""
-    for name in ('PRACTICUM_TOKEN', 'TELEGRAM_TOKEN', 'TELEGRAM_CHAT_ID'):
+    empty_tokens = []
+    for name in TOKENS:
         if not globals()[name]:
-            logger.critical(EMPTY_TOKEN_ERROR.format(name=name))
-            return False
-    return True
+            empty_tokens.append(name)
+    if empty_tokens:
+        logger.critical(EMPTY_TOKEN_ERROR.format(name=empty_tokens))
+        raise TokensError(DATA_ERROR.format(error=empty_tokens))
 
 
 def send_message(bot, message):
@@ -161,10 +164,7 @@ def parse_status(homework):
 
 def main():
     """Основная логика работы бота."""
-    try:
-        check_tokens()
-    except Exception as error:
-        raise TokensError(DATA_ERROR.format(error=error))
+    check_tokens()
     bot = Bot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time())
     prev_error = ''
