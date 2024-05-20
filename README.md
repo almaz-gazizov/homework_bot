@@ -5,7 +5,7 @@ Telegram-бот для определения статуса принятия р
 
 ## Стек используемых технологий:
 
-Python, Django, Telegram API.
+Python, Telegram API.
 
 ## Структура кода:
 
